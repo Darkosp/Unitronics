@@ -95,6 +95,14 @@ Dropped`).
 промената влегла → Download → тест: извади кабел 5–10 s, врати; врската да се
 врати сама за < 30 s без download.
 
+## Решение (Vision-side watchdog) — потврдено изводливо
+
+FB-овите на Vision се потврдени (Close: TCP, Socket Init, PING, MODBUS IP
+Configuration). Полн дизајн на рунговите:
+[`VisiLogic/docs/reconnect-watchdog-design.md`](../../VisiLogic/docs/reconnect-watchdog-design.md).
+Единствено што останува е да се одбере тригерот (статус-бит за пад на Socket 2,
+или PING-варијанта).
+
 ## Сè уште отворено
 - [x] TCP Keepalive НЕ постои во UniLogic GUI → ladder е единствениот пат.
 - [ ] Connect/reconnect механизам за Фаза 2 (види `MODBUS_RTU_TCP_Read_Write` /
