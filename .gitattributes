@@ -1,0 +1,20 @@
+# Unitronics-ки проектни фајлови се бинарни/сопственички формати.
+# Git може да ги чува и верзионира, но НЕ може да ги спои (merge) ниту да
+# прикаже смислен diff. Затоа: еден човек работи на еден проект во исто време.
+
+# --- VisiLogic (Vision / Samba) ---
+*.vlp   binary
+*.vlx   binary
+*.vsw   binary
+
+# --- UniLogic (UniStream) ---
+*.ulpr  binary
+*.ulle  binary
+
+# --- Излезни/компајлирани фајлови ---
+*.bin   binary
+*.dnl   binary
+
+# --- Документација и текст ---
+*.md    text eol=lf
+*.csv   text eol=lf
