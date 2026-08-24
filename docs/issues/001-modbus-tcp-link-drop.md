@@ -1,8 +1,8 @@
 # 001 — Modbus TCP врската паѓа без најава
 
 **Статус:** ПРИЧИНА ПОТВРДЕНА · **Заведено:** 2026-08-24
-**Метод:** UniLogic `.ulpr` декодиран и прочитан од внатрешната SQL база + ladder
-screenshot-и од двете апликации (UniLogic master и VisiLogic slave).
+**Метод:** UniLogic `.ulpr` декодиран од внатрешната SQL база + ladder и
+конфигурациски screenshot-и од двете апликации.
 
 ## Симптоми (пријавени)
 
@@ -12,96 +12,91 @@ screenshot-и од двете апликации (UniLogic master и VisiLogic s
 
 ## Потврден доказ (screenshot-и, 2026-08-24)
 
-### Master (UniLogic) — рутина `30_AQUIZACIJA_TCP_MODBUS_MASTER`
+### Master (UniLogic) — `30_AQUIZACIJA_TCP_MODBUS_MASTER`
+MODBUS Master FB, стартуван на rising edge (P) од `Mdb_TCP_start`, излез
+`Status_MDB`. Вредности: `0`=No Error, `1`=Function start, `2`=Function in
+progress, `-1`=Modbus error, ...
 
-MODBUS Master функциски блок, стартуван на rising edge (P) од `Mdb_TCP_start`,
-излез во `Status_MDB`. Вредности на Status:
+**Набљудувано при пад:** `Status_MDB` оди `0 → 2` и **останува 2 засекогаш**;
+се враќа на `0` само по повторен download на целата апликација.
 
-```
- 0 = No Error         1 = Function start (UniCom sent)   2 = Function in progress
--1 = Modbus error    -2 = Init error   -4 = Invalid group ID   ...
-```
+### Master — конфигурација на слејвот `Modbus_TCP_V_130`
+- Com: `10.30.202.15 : 502`, Slave ID `255`, Response Timeout `1000` ms,
+  Optimal queue `15`.
+- **Сите операции се Aperiodic:** Registers Aperiodic (21) + Coils Aperiodic (9)
+  = 30. Periodic табовите се 0. → трансакциите се **тригерирани од ladder**, не
+  автоматски полирани.
+- Постои **дијагностичка структура по слејв:** `Status, Sessions, Success, Fail,
+  IP, Dropped, Remote Slave ID`.
 
-**Набљудувано при пад на линкот:** `Status_MDB` оди `0 → 2` и **останува 2**
-(Function in progress) сè додека линкот е изгубен. Се враќа на `0` **само** по
-повторен download на целата апликација.
-
-### Slave (VisiLogic V130) — Main Routine
-
-- Rung 1–2 (на `SB 2` power-up): Close Socket 2 → Card Init → Sock Init 1/2/3 →
-  **MODBUS IP CONFIG на Socket 2**, TCP 502, Network ID 255, Timeout D#100 (1s),
-  Retries D#3.
-- Rung 3 (на `SB 2`): SET на бит за **активирање „Link lost"** (auto-detekcija
-  и ослободување на socket-от при пад).
-- Rung 4 (без услов): `MODBUS IP SCAN_EX` — служи барања постојано.
+### Slave (VisiLogic V130)
+- Socket init + MODBUS IP Config само на `SB 2` (power-up); „Link lost"
+  активиран (rung 3) → Vision се враќа во listen и чека нова врска. **Vision е
+  добро конфигуриран.**
 
 ## ПРИЧИНА (потврдена)
 
-**MODBUS Master блокот на UniLogic виси во недовршена трансакција (Status 2)
-засекогаш, бидејќи TCP keepalive е исклучен на портот преку кој оди.**
+**MODBUS Master FB виси на Status 2 засекогаш, бидејќи TCP keepalive е исклучен
+на Panel Ethernet — мртвиот socket никогаш не се прогласува за неуспешен.**
 
-Механика, чекор по чекор:
-1. Блокот праќа Modbus барање преку TCP socket (Panel Ethernet, `10.30.202.1`).
-2. Линкот паѓа. Барањето седи во TCP буфер и чека ACK што не доаѓа.
-3. **Keepalive = 0/0/0 на Panel Ethernet** → OS TCP стекот никогаш не прогласува
-   дека socket-от е мртов → нема грешка, нема timeout на ниво на врска.
-4. Затоа FB вечно останува на `2` — ни одговор, ни грешка (`-1`).
-5. Заглавен FB на `2` е зафатен → не прифаќа нова трансакција → целиот master
-   е блокиран засекогаш.
-6. Само download брише сè (FB состојба + сите сокети) и прави свеж старт → `0`.
+1. FB праќа барање преку TCP (Panel Ethernet, `10.30.202.1`).
+2. Линкот паѓа; барањето седи во TCP буфер, чека ACK што не доаѓа.
+3. **Keepalive 0/0/0 на Panel Ethernet** → OS никогаш не го прогласува socket-от
+   мртов → Response Timeout (1000ms) не се активира бидејќи FB виси во фазата на
+   праќање, не на чекање одговор.
+4. FB останува на `2`, зафатен → блокира сите нови трансакции.
+5. Само download брише сè → `0`.
 
-Vision страната **е добро конфигурирана** (link-lost активиран → се враќа во
-listen и чека нова врска). Проблемот е целосно на master страната.
+## Наоди
 
-### Потпорни фактори од конфигурацијата (од `.ulpr`)
-
-- **F2 (примарна):** `CommunicationsConfiguration` → Panel Ethernet
-  `TCPKeepaliveTime/Interval/Retry = 0/0/0` (исклучен). CPU Ethernet го има
-  вклучен (7200/75/10). Modbus master оди преку Panel Ethernet.
-- **F3 (окидач):** `MODBUSSlaveAddressType` → 30 трансакции кон Vision, сите на
-  `EveryPeriod = 100 ms` (~300/сек) кон еден V130 — го предизвикува падот.
-- **F1 (ризик):** двата UniStream порта (`.20` и `.1`) на иста подмрежа
-  `10.30.202.0/24` (ARP/routing двосмисленост).
+- **F2 (примарна):** Panel Ethernet keepalive `0/0/0` (исклучен). CPU Ethernet
+  `7200/75/10`. Modbus master оди преку Panel Ethernet. **Keepalive НЕ Е
+  достапен во UniLogic GUI** (потврдено 2026-08-24) — не може да се смени, па
+  поправката мора да е во ladder.
+- **F1 (потврдено визуелно):** Panel `10.30.202.1/24` и CPU `10.30.202.20/24` —
+  двата на иста подмрежа `10.30.202.0/24`. ARP/routing двосмисленост.
+- ~~F3 полирање 100ms~~ **ПОВЛЕЧЕНО:** операциите се Aperiodic (ladder-тригерирани),
+  не автоматски полирани. Не е причина.
 - **F4 (хигиена):** мртов „Remote Slave1" на `0.0.0.0` — да се исчисти.
 
-## Поправка — фазно (сите измени се само во UniLogic; Vision не се дира)
+## Поправка — ladder watchdog (единствен изводлив пат)
 
-### Фаза 1 — Keepalive (само параметар, БЕЗ ladder) ⭐ прво
+TCP Keepalive не постои во UniLogic GUI, па socket-от не може да се натера да
+падне на ниво на OS. Затоа опоравувањето мора да го направи **ladder-от** на
+UniStream. Имаме сè што треба: операциите се веќе ladder-тригерирани (aperiodic)
+и постои дијагностичка структура по слејв (`Status, Sessions, Success, Fail,
+Dropped`).
 
-Вклучи TCP Keepalive на **Panel Ethernet**. Тогаш мртвиот socket ќе се затвори
-за ~15–20s, FB ќе врати `-1` наместо да виси на `2`, и нормалната trigger
-логика повторно ќе ја активира трансакцијата на свеж socket. **Ова само по себе
-може да го реши проблемот.**
+### Чекор 1 — Детекција (сигурна, веќе можна)
+- TON `T_MdbStuck`, PT ≈ 5 s, IN = (`Status_MDB` == 2). Кога != 2 → ресет.
+- Алтернативно/дополнително: следи пораст на `Modbus_TCP_V_130.Dropped`/`.Fail`
+  или падот на `Modbus_TCP_V_130.Status`.
 
-Предложени вредности: Time = 20 s, Interval = 5 s, Retry = 3.
+### Чекор 2 — Опоравување (механизмот треба да се потврди)
+На `T_MdbStuck.Q`, треба да се изврши едно од следниве — **кое е достапно се
+гледа од MODBUS палетата/рутините во проектот**:
+- Ако постои MODBUS **Disconnect/Connect** (или socket close/open) за таа врска —
+  повикај го, па ресетирај го `Mdb_TCP_start`.
+- Ако нема explicit disconnect — превентивна стратегија: **PING gating**. Пред
+  секое `Mdb_TCP_start`, провери со PING FB дека `10.30.202.15` одговара; ако не,
+  не праќај трансакција (за да FB не се заглави воопшто), и продолжи штом ping
+  се врати.
 
-### Фаза 2 — Растоварување (само параметри, БЕЗ ladder)
+> За да ги дефинирам ТОЧНИТЕ блокови ми требаат screenshot-и (види „Сè уште
+> отворено"). Без нив не можам да измислувам FB што можеби не постои.
 
-- F3: смени `EveryPeriod` од 100 ms на 500 ms–1 s за Modbus scan-от кон Vision.
+### Чекор 3 — хигиена и дијагностика
 - F4: избриши го „Remote Slave1" (0.0.0.0).
-
-### Фаза 3 — Watchdog во ladder (само ако Фаза 1–2 не е доволна)
-
-Осигурување — дури и ако FB виси:
-- TON тајмер `T_MdbStuck`, PT ≈ 5 s, IN = (`Status_MDB` == 2). Кога Status != 2,
-  тајмерот се ресетира.
-- На `T_MdbStuck.Q`:
-  1. Изврши Modbus reconnect (Disconnect → Connect) на таа TCP врска, и
-  2. ресетирај го trigger-от (`Mdb_TCP_start`) за нова трансакција.
-
-Точниот reconnect механизам зависи од достапните MODBUS FB-ови во проектот — да
-се дефинира заедно откако ќе се види connect логиката.
+- F1: ако двата порта се физички на иста мрежа, раздели подмрежи.
+- HMI екран со `Status, Success, Fail, Dropped, Sessions`.
 
 ## Проверка (loop со докази)
-
-По секоја фаза: Save во UniLogic → испрати го новиот `.ulpr` → се пре-декодира и
-се потврдува дека промената навистина влегла (keepalive != 0, EveryPeriod
-сменет) → Download → тест на терен со намерен прекин на линкот (извади кабел
-5–10 s, врати го) → врската треба да се врати **сама** за < 30 s без download.
+По секоја фаза: Save → испрати `.ulpr` → пре-декодирам и потврдувам дека
+промената влегла → Download → тест: извади кабел 5–10 s, врати; врската да се
+врати сама за < 30 s без download.
 
 ## Сè уште отворено
-
-- [ ] Потврди го точниот SB број за „link lost" на Vision (hover во rung 3).
-- [ ] Провери ја UniLogic рутината `MODBUS_RTU_TCP_Read_Write` / connect логиката
-      за Фаза 3.
-- [ ] F1: физичка топологија — колку кабли, ист switch?
+- [x] TCP Keepalive НЕ постои во UniLogic GUI → ladder е единствениот пат.
+- [ ] Connect/reconnect механизам за Фаза 2 (види `MODBUS_RTU_TCP_Read_Write` /
+      како се сетира `Mdb_TCP_start`).
+- [ ] Точниот SB број за „link lost" на Vision (потврда).
