@@ -1,0 +1,19 @@
+# Windows
+Thumbs.db
+desktop.ini
+*~
+*.tmp
+
+# Backup-и што VisiLogic / UniLogic ги создаваат покрај проектот
+*.bak
+*.bak[0-9]
+Backup/
+AutoSave/
+autosave/
+
+# Локални белешки што не одат во репото
+scratch/
+*.local.md
+
+# Лични Claude Code поставки (не се споделуваат)
+.claude/settings.local.json
